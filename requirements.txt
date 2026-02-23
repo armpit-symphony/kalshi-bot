@@ -1,0 +1,6 @@
+requests
+cryptography
+newsapi-python
+python-telegram-bot
+python-dotenv
+xai-sdk
