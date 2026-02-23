@@ -1,0 +1,2 @@
+2026-02-23 00:46:12,627 - main - CRITICAL - Failed to initialize Kalshi API: KalshiAPI.__init__() missing 2 required positional arguments: 'api_key_id' and 'private_key_pem'
+2026-02-23 00:46:25,591 - __main__ - CRITICAL - Failed to initialize Kalshi API: KalshiAPI.__init__() missing 2 required positional arguments: 'api_key_id' and 'private_key_pem'
