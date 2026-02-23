@@ -8,7 +8,7 @@ import sys
 import time
 import threading
 import sqlite3
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+from telegram.ext import Updater, CommandHandler, MessageHandler, filters as FiltersModule
 from dotenv import load_dotenv
 
 from kalshi_api import KalshiAPI
