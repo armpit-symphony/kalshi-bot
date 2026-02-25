@@ -18,10 +18,9 @@ class NewsFetcher:
     
     def fetch_news(self, query: str, max_results: int = 5) -> List[str]:
         """
-        Fetch news articles related        
+        Fetch news articles related.
         Args:
-            query: Search to a query.
- query (usually market title)
+            query: Search query (usually market title)
             max_results: Maximum number of articles to return
         
         Returns:
@@ -60,5 +59,7 @@ def fetch_news(query: str, api_key: str, max_results: int = 5) -> List[str]:
     Returns:
         List of descriptions
     """
+    if not api_key:
+        return []
     fetcher = NewsFetcher(api_key)
     return fetcher.fetch_news(query, max_results)

@@ -53,6 +53,42 @@ def get_open_trades(conn, ticker=None):
         cursor.execute("SELECT * FROM trades WHERE status='open'")
     return cursor.fetchall()
 
+def get_open_trades_count(conn):
+    """Get count of open trades."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM trades WHERE status='open'")
+    row = cursor.fetchone()
+    return int(row[0]) if row else 0
+
+def has_open_trade(conn, ticker: str) -> bool:
+    """Check if there is an open trade for a ticker."""
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT 1 FROM trades WHERE status='open' AND ticker=? LIMIT 1",
+        (ticker,),
+    )
+    return cursor.fetchone() is not None
+
+def get_last_trade_time(conn, ticker: str):
+    """Get the most recent trade timestamp for a ticker."""
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT timestamp FROM trades WHERE ticker=? ORDER BY timestamp DESC LIMIT 1",
+        (ticker,),
+    )
+    row = cursor.fetchone()
+    return row[0] if row else None
+
+def count_trades_since(conn, since_ts: float) -> int:
+    """Count total trades placed since a timestamp."""
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT COUNT(*) FROM trades WHERE timestamp >= ?",
+        (since_ts,),
+    )
+    row = cursor.fetchone()
+    return int(row[0]) if row else 0
+
 def close_trade(conn, trade_id, settlement_price):
     """Close a trade with settlement price."""
     cursor = conn.cursor()
