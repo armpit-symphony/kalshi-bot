@@ -3,11 +3,14 @@
 import os
 import time
 import base64
+import logging
 import requests
 from typing import List, Dict, Any, Optional
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.backends import default_backend
+
+logger = logging.getLogger(__name__)
 
 
 class KalshiAPI:
@@ -34,7 +37,7 @@ class KalshiAPI:
         if use_demo:
             self.base_url = 'https://demo-api.kalshi.co/trade-api/v2'
         else:
-            self.base_url = 'https://trading-api.kalshi.com/trade-api/v2'
+            self.base_url = 'https://api.elections.kalshi.com/trade-api/v2'
         
         # Load private key
         self._private_key = serialization.load_pem_private_key(
@@ -47,8 +50,8 @@ class KalshiAPI:
         """Create signed headers for API request."""
         timestamp = str(int(time.time() * 1000))
         
-        # Create the message to sign
-        message = f"{timestamp}{method.upper()}{path}".encode('utf-8')
+        # Create the message to sign — full path including API version prefix
+        message = f"{timestamp}{method.upper()}/trade-api/v2{path}".encode('utf-8')
         
         # Sign with RSA-PSS
         signature = self._private_key.sign(
@@ -101,7 +104,7 @@ class KalshiAPI:
         return self._request(
             'GET',
             '/markets',
-            params={'status': 'active', 'limit': limit}
+            params={'status': 'open', 'limit': limit}
         ).get('markets', [])
     
     def get_market(self, ticker: str) -> Dict[str, Any]:
@@ -140,15 +143,18 @@ class KalshiAPI:
             'type': order_type,
             'action': 'buy'
         }
-        
-        if order_type == 'limit' and price is not None:
-            data['price'] = price
+
+        if price is not None:
+            if side == 'yes':
+                data['yes_price'] = int(price)
+            else:
+                data['no_price'] = int(price)
         
         try:
-            result = self._request('POST', '/orders', data=data)
-            return result.get('order_id')
+            result = self._request('POST', '/portfolio/orders', data=data)
+            return result.get('order', {}).get('order_id')
         except Exception as e:
-            print(f"Order failed: {e}")
+            logger.error(f"Order failed for {ticker}: {e}")
             return None
     
     def get_positions(self) -> List[Dict[str, Any]]:
@@ -178,3 +184,10 @@ class KalshiAPI:
     def get_settlements(self) -> List[Dict[str, Any]]:
         """Get settlement history."""
         return self._request('GET', '/portfolio/settlements').get('settlements', [])
+
+    def get_recent_trades(self, ticker: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Get recent trades for a market."""
+        try:
+            return self._request('GET', f'/markets/{ticker}/trades', params={'limit': limit}).get('trades', [])
+        except Exception:
+            return []
