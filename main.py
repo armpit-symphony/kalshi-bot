@@ -703,14 +703,18 @@ async def post_init(application):
 
 
 if __name__ == '__main__':
-    app = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
-    app.add_handler(CommandHandler('start', cmd_start))
-    app.add_handler(CommandHandler('status', cmd_status))
-    app.add_handler(CommandHandler('signals', cmd_signals))
-    app.add_handler(CommandHandler('toggle_auto', cmd_toggle_auto))
-    app.add_handler(CommandHandler('performance', cmd_performance))
-    app.add_handler(CommandHandler('edge_report', cmd_edge_report))
-    app.add_handler(CallbackQueryHandler(callback_query))
+    if TELEGRAM_TOKEN:
+        app = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
+        app.add_handler(CommandHandler('start', cmd_start))
+        app.add_handler(CommandHandler('status', cmd_status))
+        app.add_handler(CommandHandler('signals', cmd_signals))
+        app.add_handler(CommandHandler('toggle_auto', cmd_toggle_auto))
+        app.add_handler(CommandHandler('performance', cmd_performance))
+        app.add_handler(CommandHandler('edge_report', cmd_edge_report))
+        app.add_handler(CallbackQueryHandler(callback_query))
 
-    logger.info("Starting bot...")
-    app.run_polling()
+        logger.info("Starting bot...")
+        app.run_polling()
+    else:
+        logger.warning("TELEGRAM_TOKEN not set; running without Telegram.")
+        monitor_markets()
