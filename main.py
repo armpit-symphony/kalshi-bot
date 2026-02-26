@@ -115,6 +115,7 @@ init_db(db_conn)
 auto_trade_enabled = AUTO_TRADE
 pending_trades = {}
 _app = None  # telegram Application instance
+_service_started_ts = time.time()
 
 
 async def send_message(text, reply_markup=None):
@@ -598,7 +599,10 @@ def monitor_markets():
 
 
 async def cmd_start(update, context):
-    await update.message.reply_text("Welcome! Monitoring Kalshi markets.")
+    await update.message.reply_text(
+        "Welcome! Monitoring Kalshi markets.\n"
+        "Commands: /status /signals /toggle_auto /performance /edge_report /health"
+    )
     logger.info("Telegram /start command received.")
 
 
@@ -627,6 +631,14 @@ async def cmd_performance(update, context):
     except Exception as e:
         logger.error(f"Error getting performance: {e}")
         await update.message.reply_text("Error retrieving performance.")
+
+async def cmd_health(update, context):
+    try:
+        uptime = int(time.time() - _service_started_ts)
+        await update.message.reply_text(f"OK\nUptime: {uptime}s")
+    except Exception as e:
+        logger.error(f"Error getting health: {e}")
+        await update.message.reply_text("Error retrieving health.")
 
 
 async def cmd_edge_report(update, context):
@@ -709,9 +721,10 @@ if __name__ == '__main__':
         app.add_handler(CommandHandler('status', cmd_status))
         app.add_handler(CommandHandler('signals', cmd_signals))
         app.add_handler(CommandHandler('toggle_auto', cmd_toggle_auto))
-        app.add_handler(CommandHandler('performance', cmd_performance))
-        app.add_handler(CommandHandler('edge_report', cmd_edge_report))
-        app.add_handler(CallbackQueryHandler(callback_query))
+    app.add_handler(CommandHandler('performance', cmd_performance))
+    app.add_handler(CommandHandler('edge_report', cmd_edge_report))
+    app.add_handler(CommandHandler('health', cmd_health))
+    app.add_handler(CallbackQueryHandler(callback_query))
 
         logger.info("Starting bot...")
         app.run_polling()
