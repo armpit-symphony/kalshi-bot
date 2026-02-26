@@ -114,6 +114,52 @@ class KalshiAPI:
     def get_market_orderbook(self, ticker: str) -> Dict[str, Any]:
         """Get order book for a market."""
         return self._request('GET', f'/markets/{ticker}/orderbook')
+
+    def get_best_ask(self, ticker: str, side: str) -> Optional[int]:
+        """
+        Get best ask price for a side ("yes" or "no").
+        Returns price in 0-100, or None if unavailable.
+        """
+        try:
+            book = self.get_market_orderbook(ticker)
+        except Exception:
+            return None
+
+        side = side.lower()
+
+        def _extract_asks(container) -> Optional[int]:
+            if not container:
+                return None
+            asks = container.get('asks') or container.get('ask') or []
+            if not asks:
+                return None
+            prices = []
+            for a in asks:
+                if isinstance(a, dict) and 'price' in a:
+                    prices.append(a['price'])
+                elif isinstance(a, (list, tuple)) and len(a) > 0:
+                    prices.append(a[0])
+            return min(prices) if prices else None
+
+        # Common shapes: {"yes": {"asks": [...]}, "no": {"asks": [...]}}
+        if isinstance(book, dict):
+            if side in book and isinstance(book[side], dict):
+                best = _extract_asks(book[side])
+                if best is not None:
+                    return best
+
+            # Alternate shapes
+            key = f"{side}_asks"
+            if key in book and isinstance(book[key], list):
+                prices = []
+                for a in book[key]:
+                    if isinstance(a, dict) and 'price' in a:
+                        prices.append(a['price'])
+                    elif isinstance(a, (list, tuple)) and len(a) > 0:
+                        prices.append(a[0])
+                return min(prices) if prices else None
+
+        return None
     
     def place_order(
         self,

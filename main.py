@@ -17,12 +17,14 @@ from grok_analysis import analyze_with_grok
 from db import (
     init_db,
     add_trade,
+    add_signal,
     get_open_trades,
     get_open_trades_count,
     has_open_trade,
     get_last_trade_time,
     count_trades_since,
     get_performance,
+    get_edge_report,
     close_trade,
     add_lesson,
     get_lessons,
@@ -48,6 +50,7 @@ class _RedactSecretsFilter(logging.Filter):
             pass
         return True
 
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
@@ -62,6 +65,8 @@ for _handler in logging.getLogger().handlers:
     _handler.addFilter(_RedactSecretsFilter())
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
+
+load_dotenv(dotenv_path='/home/sparky/.keys/kalshi.env')
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
@@ -69,7 +74,7 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 AUTO_TRADE = os.getenv('AUTO_TRADE', 'false').lower() == 'true'
 USE_DEMO = os.getenv('USE_DEMO', 'true').lower() == 'true'
 CONFIDENCE_THRESHOLD = float(os.getenv('CONFIDENCE_THRESHOLD', '0.7'))
-EDGE_THRESHOLD = float(os.getenv('EDGE_THRESHOLD', '0.05'))
+EDGE_THRESHOLD = float(os.getenv('EDGE_THRESHOLD', os.getenv('MIN_EDGE', '0.05')))
 TRADE_SIZE = int(os.getenv('TRADE_SIZE', '1'))
 MONITOR_INTERVAL = int(os.getenv('MONITOR_INTERVAL', '300'))
 VOLATILITY_THRESHOLD = float(os.getenv('VOLATILITY_THRESHOLD', '10'))
@@ -80,25 +85,27 @@ MAX_OPEN_POSITIONS = int(os.getenv('MAX_OPEN_POSITIONS', '5'))
 MAX_TRADES_PER_DAY = int(os.getenv('MAX_TRADES_PER_DAY', '10'))
 TICKER_COOLDOWN_HOURS = int(os.getenv('TICKER_COOLDOWN_HOURS', '6'))
 ALLOW_MULTIPLE_PER_EVENT = os.getenv('ALLOW_MULTIPLE_PER_EVENT', 'false').lower() == 'true'
+LIMIT_ORDER_TIMEOUT = int(os.getenv('LIMIT_ORDER_TIMEOUT', '60'))
 
 NEWSAPI_KEY = os.getenv('NEWSAPI_KEY')
 XAI_API_KEY = os.getenv('XAI_API_KEY')
 KALSHI_API_KEY_ID = os.getenv('KALSHI_API_KEY_ID')
+KALSHI_PEM_PATH = os.getenv('KALSHI_PEM_PATH', '/home/sparky/.keys/kalshi.pem')
 
 MAX_COMBO_POSITIONS = int(os.getenv('MAX_COMBO_POSITIONS', '6'))
 HIGH_CONFIDENCE_THRESHOLD = float(os.getenv('HIGH_CONFIDENCE_THRESHOLD', '0.9'))
 MAX_TOTAL_POSITIONS = int(os.getenv('MAX_TOTAL_POSITIONS', '10'))
 CATEGORIES_TO_INCLUDE = os.getenv('CATEGORIES_TO_INCLUDE', 'all')
 DIVERSIFY_SELECTION = os.getenv('DIVERSIFY_SELECTION', 'true').lower() == 'true'
-_pem_path = os.getenv('KALSHI_PEM_PATH', '/home/sparky/.keys/kalshi.pem')
-with open(_pem_path, 'r') as _f:
-    KALSHI_PRIVATE_KEY_PEM = _f.read()
 
 try:
-    kalshi = KalshiAPI(api_key_id=KALSHI_API_KEY_ID, private_key_pem=KALSHI_PRIVATE_KEY_PEM, use_demo=USE_DEMO)
+    with open(KALSHI_PEM_PATH, 'r') as f:
+        private_key_pem = f.read()
+    kalshi = KalshiAPI(api_key_id=KALSHI_API_KEY_ID, private_key_pem=private_key_pem, use_demo=USE_DEMO)
     logger.info("Kalshi API initialized successfully.")
-except Exception as e:
-    logger.critical(f"Failed to initialize Kalshi API: {e}")
+except Exception:
+    # Avoid logging exception details that may contain key material
+    logger.critical("Failed to initialize Kalshi API. Check credentials and PEM file.")
     raise
 
 db_conn = sqlite3.connect('database.db', check_same_thread=False)
@@ -235,6 +242,24 @@ def _get_open_positions_count() -> int:
         return get_open_trades_count(db_conn)
 
 
+def cancel_order_if_open(order_id: str, timeout_seconds: int):
+    """Cancel order if it is still open after timeout."""
+    try:
+        time.sleep(timeout_seconds)
+        try:
+            open_orders = kalshi.get_orders(status='open')
+        except Exception as e:
+            logger.error(f"Failed to fetch open orders for cancel check: {e}")
+            return
+        if any(o.get('order_id') == order_id for o in open_orders):
+            if kalshi.cancel_order(order_id):
+                logger.info(f"Canceled stale order {order_id} after {timeout_seconds}s")
+            else:
+                logger.warning(f"Failed to cancel stale order {order_id}")
+    except Exception as e:
+        logger.error(f"Error in cancel_order_if_open: {e}")
+
+
 def monitor_markets():
     from collections import defaultdict
     loop = asyncio.new_event_loop()
@@ -291,11 +316,11 @@ def monitor_markets():
                         continue
 
                 try:
-                    news = fetch_news(search_query, api_key=NEWSAPI_KEY)
+                    news = fetch_news(search_query, api_key=NEWSAPI_KEY) if NEWSAPI_KEY else []
                     logger.debug(f"Fetched news for {ticker}: {len(news)} articles.")
                 except Exception as e:
                     logger.error(f"Error fetching news for {ticker}: {e}")
-                    continue
+                    news = []
 
                 pricing = _get_market_pricing(market, ticker)
                 if not pricing or pricing.get("yes_ask") is None or pricing.get("no_ask") is None:
@@ -329,6 +354,26 @@ def monitor_markets():
                     spread_ok = _spread_ok(signal, pricing)
                     if not spread_ok:
                         continue
+
+                    side = 'yes' if signal == 'YES' else 'no'
+                    best_ask = pricing.get('yes_ask') if side == 'yes' else pricing.get('no_ask')
+                    market_prob = (best_ask / 100.0) if best_ask is not None else None
+                    try:
+                        add_signal(
+                            db_conn,
+                            ticker,
+                            side,
+                            signal,
+                            confidence,
+                            confidence,
+                            market_prob if market_prob is not None else 0.0,
+                            edge,
+                            best_ask,
+                            time.time(),
+                            description,
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to log signal for {ticker}: {e}")
 
                     raw_signals.append({
                         'market': market,
@@ -414,6 +459,7 @@ def monitor_markets():
                         if price is None:
                             continue
 
+                        # Check for anomaly
                         recent_trades = kalshi.get_recent_trades(ticker)
                         anomaly = False
                         if recent_trades:
@@ -425,6 +471,7 @@ def monitor_markets():
                                     logger.info(f"Anomaly detected for {ticker}: volatility {vol}")
 
                         if anomaly:
+                            # Require manual approval
                             pending_id = str(uuid.uuid4())
                             pending_trades[pending_id] = {
                                 'ticker': ticker,
@@ -432,7 +479,10 @@ def monitor_markets():
                                 'count': TRADE_SIZE,
                                 'price': price,
                                 'message': message,
-                                'description': description
+                                'description': description,
+                                'model_prob': confidence,
+                                'market_prob': price / 100.0,
+                                'edge': edge,
                             }
                             keyboard = [[
                                 InlineKeyboardButton("Go", callback_data=f"go:{pending_id}"),
@@ -444,6 +494,7 @@ def monitor_markets():
                                 reply_markup=reply_markup
                             ))
                         else:
+                            # Auto trade
                             order_id = kalshi.place_order(
                                 ticker,
                                 side,
@@ -452,9 +503,25 @@ def monitor_markets():
                                 price=max(1, min(99, int(price))),
                             )
                             if order_id:
-                                add_trade(db_conn, ticker, side, TRADE_SIZE, price, time.time(), description)
+                                add_trade(
+                                    db_conn,
+                                    ticker,
+                                    side,
+                                    TRADE_SIZE,
+                                    price,
+                                    time.time(),
+                                    description,
+                                    model_prob=confidence,
+                                    market_prob=price / 100.0,
+                                    edge=edge,
+                                )
                                 loop.run_until_complete(send_message(f"Trade placed: {message}"))
                                 logger.info(f"Trade placed: {message}")
+                                threading.Thread(
+                                    target=cancel_order_if_open,
+                                    args=(order_id, LIMIT_ORDER_TIMEOUT),
+                                    daemon=True
+                                ).start()
                             else:
                                 logger.warning(f"Failed to place order for {ticker}")
                     except Exception as e:
@@ -496,6 +563,7 @@ def monitor_markets():
                         close_trade(db_conn, trade[0], settlement_price)
                         logger.info(f"Closed trade {trade[0]} for {ticker}")
 
+                        # Generate lesson if wrong
                         predicted_side = trade[2]
                         actual_outcome = 'yes' if settlement_price == 100 else 'no'
                         if predicted_side != actual_outcome:
@@ -561,6 +629,23 @@ async def cmd_performance(update, context):
         await update.message.reply_text("Error retrieving performance.")
 
 
+async def cmd_edge_report(update, context):
+    try:
+        report = get_edge_report(db_conn)
+        if not report:
+            message = "No edge data yet."
+        else:
+            lines = ["Edge report (closed trades):"]
+            for r in report:
+                lines.append(f"{r['range']}: trades={r['trades']} win={r['win_rate']}% avg_pnl={r['avg_pnl']}")
+            message = "\n".join(lines)
+        await update.message.reply_text(message)
+        logger.info("Telegram /edge_report command received.")
+    except Exception as e:
+        logger.error(f"Error getting edge report: {e}")
+        await update.message.reply_text("Error retrieving edge report.")
+
+
 async def callback_query(update, context):
     query = update.callback_query
     data = query.data
@@ -577,9 +662,24 @@ async def callback_query(update, context):
                     price=max(1, min(99, int(trade_info['price'] or 50))),
                 )
                 if order_id:
-                    add_trade(db_conn, trade_info['ticker'], trade_info['side'], trade_info['count'],
-                              trade_info['price'], time.time(), trade_info['description'])
+                    add_trade(
+                        db_conn,
+                        trade_info['ticker'],
+                        trade_info['side'],
+                        trade_info['count'],
+                        trade_info['price'],
+                        time.time(),
+                        trade_info['description'],
+                        model_prob=trade_info.get('model_prob'),
+                        market_prob=trade_info.get('market_prob'),
+                        edge=trade_info.get('edge'),
+                    )
                     await query.message.reply_text(f"Approved and placed: {trade_info['message']}")
+                    threading.Thread(
+                        target=cancel_order_if_open,
+                        args=(order_id, LIMIT_ORDER_TIMEOUT),
+                        daemon=True
+                    ).start()
                 else:
                     await query.message.reply_text("Trade approved but placement failed.")
             else:
@@ -609,6 +709,7 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler('signals', cmd_signals))
     app.add_handler(CommandHandler('toggle_auto', cmd_toggle_auto))
     app.add_handler(CommandHandler('performance', cmd_performance))
+    app.add_handler(CommandHandler('edge_report', cmd_edge_report))
     app.add_handler(CallbackQueryHandler(callback_query))
 
     logger.info("Starting bot...")

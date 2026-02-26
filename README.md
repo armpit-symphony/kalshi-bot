@@ -74,6 +74,8 @@ DIVERSIFY_SELECTION=true
 CATEGORIES_TO_INCLUDE=all
 TRADE_SIZE=1
 MONITOR_INTERVAL=300
+MIN_EDGE=0.02
+LIMIT_ORDER_TIMEOUT=60
 ```
 
 ### 4. Run the bot
@@ -92,6 +94,7 @@ python main.py
 | `/signals` | Show recent signals |
 | `/toggle_auto` | Toggle auto-trading |
 | `/performance` | Show performance stats |
+| `/edge_report` | Show win rate + avg P&L by edge buckets |
 
 ## Configuration
 
@@ -110,6 +113,15 @@ python main.py
 | `ALLOW_MULTIPLE_PER_EVENT` | `false` | Allow multiple trades per event |
 | `TRADE_SIZE` | `1` | Contracts per trade |
 | `MONITOR_INTERVAL` | `300` | Seconds between scans |
+| `MAX_COMBO_POSITIONS` | `6` | Max signals per cycle (normal) |
+| `HIGH_CONFIDENCE_THRESHOLD` | `0.9` | Avg confidence to allow larger combo |
+| `MAX_TOTAL_POSITIONS` | `10` | Max signals per cycle (high confidence) |
+| `DIVERSIFY_SELECTION` | `true` | Diversify by category |
+| `CATEGORIES_TO_INCLUDE` | `all` | Filter categories (comma-separated) |
+| `MIN_EDGE` | `0.02` | Minimum model edge over market price |
+| `LIMIT_ORDER_TIMEOUT` | `60` | Seconds before canceling unfilled limit orders |
+| `MIN_EDGE` | `0.02` | Minimum model edge over market price |
+| `LIMIT_ORDER_TIMEOUT` | `60` | Seconds before canceling unfilled limit orders |
 | `MAX_COMBO_POSITIONS` | `6` | Max signals per cycle (normal) |
 | `HIGH_CONFIDENCE_THRESHOLD` | `0.9` | Avg confidence to allow larger combo |
 | `MAX_TOTAL_POSITIONS` | `10` | Max signals per cycle (high confidence) |
@@ -137,6 +149,21 @@ The `trades` table stores:
 - `timestamp`: Entry time
 - `status`: open/closed
 - `settlement_price`: Price at settlement
+- `model_prob`: Model probability (if available)
+- `market_prob`: Market implied probability at entry
+- `edge`: Model edge at entry
+
+The `signals` table stores:
+- `id`: Signal ID
+- `ticker`: Market ticker
+- `side`: YES or NO
+- `signal`: YES/NO
+- `confidence`: Raw model confidence
+- `model_prob`: Model probability
+- `market_prob`: Market implied probability at signal time
+- `edge`: Model edge at signal time
+- `best_ask`: Best ask used for pricing
+- `timestamp`: Signal time
 
 ## Disclaimer
 

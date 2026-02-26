@@ -17,7 +17,25 @@ def init_db(conn):
             description TEXT,
             timestamp REAL NOT NULL,
             status TEXT DEFAULT 'open',
-            settlement_price REAL
+            settlement_price REAL,
+            model_prob REAL,
+            market_prob REAL,
+            edge REAL
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS signals (
+            id INTEGER PRIMARY KEY,
+            ticker TEXT NOT NULL,
+            side TEXT NOT NULL,
+            signal TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            model_prob REAL NOT NULL,
+            market_prob REAL NOT NULL,
+            edge REAL NOT NULL,
+            best_ask REAL,
+            description TEXT,
+            timestamp REAL NOT NULL
         )
     ''')
     cursor.execute('''
@@ -34,15 +52,44 @@ def init_db(conn):
     conn.commit()
     logger.info("Database initialized.")
 
-def add_trade(conn, ticker, side, count, price, timestamp, description=''):
+    # Best-effort migrations for older DBs
+    for col, col_type in (
+        ("model_prob", "REAL"),
+        ("market_prob", "REAL"),
+        ("edge", "REAL"),
+    ):
+        try:
+            cursor.execute(f"ALTER TABLE trades ADD COLUMN {col} {col_type}")
+            conn.commit()
+        except sqlite3.OperationalError:
+            # Column already exists
+            pass
+
+def add_trade(conn, ticker, side, count, price, timestamp, description='', model_prob=None, market_prob=None, edge=None):
     """Add a new trade to the database."""
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO trades (ticker, side, count, price, description, timestamp, status)
-        VALUES (?, ?, ?, ?, ?, ?, 'open')
-    ''', (ticker, side, count, price, description, timestamp))
+        INSERT INTO trades (
+            ticker, side, count, price, description, timestamp, status,
+            model_prob, market_prob, edge
+        )
+        VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
+    ''', (ticker, side, count, price, description, timestamp, model_prob, market_prob, edge))
     conn.commit()
     logger.info(f"Added trade for {ticker}")
+
+def add_signal(conn, ticker, side, signal, confidence, model_prob, market_prob, edge, best_ask, timestamp, description=''):
+    """Add a new signal to the database."""
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO signals (
+            ticker, side, signal, confidence, model_prob, market_prob,
+            edge, best_ask, description, timestamp
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (ticker, side, signal, confidence, model_prob, market_prob, edge, best_ask, description, timestamp))
+    conn.commit()
+    logger.info(f"Added signal for {ticker}")
 
 def get_open_trades(conn, ticker=None):
     """Get all open trades."""
@@ -124,6 +171,45 @@ def get_performance(conn):
     win_rate = (wins / total * 100) if total > 0 else 0
     
     return {'win_rate': round(win_rate, 2), 'pnl': round(pnl, 2), 'total_trades': total}
+
+def get_edge_report(conn):
+    """Bucket win rate and avg P&L by edge."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM trades WHERE status='closed' AND edge IS NOT NULL")
+    closed = cursor.fetchall()
+    if not closed:
+        return []
+
+    buckets = [
+        (0.00, 0.02),
+        (0.02, 0.05),
+        (0.05, 0.10),
+        (0.10, 1.00),
+    ]
+    results = []
+    for low, high in buckets:
+        bucket_trades = [t for t in closed if t[11] is not None and low <= t[11] < high]
+        if not bucket_trades:
+            continue
+        pnl = 0
+        wins = 0
+        for trade in bucket_trades:
+            if trade[2] == 'yes':
+                trade_pnl = trade[3] * (trade[8] - trade[4]) / 100
+            else:
+                trade_pnl = trade[3] * ((100 - trade[8]) - (100 - trade[4])) / 100
+            pnl += trade_pnl
+            if trade_pnl > 0:
+                wins += 1
+        total = len(bucket_trades)
+        win_rate = (wins / total * 100) if total > 0 else 0
+        results.append({
+            "range": f"{low:.2f}-{high:.2f}",
+            "trades": total,
+            "win_rate": round(win_rate, 2),
+            "avg_pnl": round(pnl / total, 4),
+        })
+    return results
 
 def add_lesson(conn, ticker, description, predicted_side, actual_outcome, lesson):
     """Add a lesson from a wrong prediction."""
